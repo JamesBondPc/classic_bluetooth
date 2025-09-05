@@ -1,33 +1,79 @@
 package com.example.classic_bluetooth
 
+import android.bluetooth.*
+import android.content.Context
+import androidx.annotation.NonNull
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import io.flutter.plugin.common.MethodChannel.Result
+import io.flutter.plugin.common.EventChannel
 
-/** ClassicBluetoothPlugin */
-class ClassicBluetoothPlugin: FlutterPlugin, MethodCallHandler {
-  /// The MethodChannel that will the communication between Flutter and native Android
-  ///
-  /// This local reference serves to register the plugin with the Flutter Engine and unregister it
-  /// when the Flutter Engine is detached from the Activity
-  private lateinit var channel : MethodChannel
+class ClassicBluetoothPlugin: FlutterPlugin, MethodChannel.MethodCallHandler {
 
-  override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-    channel = MethodChannel(flutterPluginBinding.binaryMessenger, "classic_bluetooth")
-    channel.setMethodCallHandler(this)
-  }
+    private lateinit var channel : MethodChannel
+    private lateinit var eventChannel: EventChannel
+    private var context: Context? = null
+    private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
+    private val sockets = mutableMapOf<String, BluetoothSocket>()
 
-  override fun onMethodCall(call: MethodCall, result: Result) {
-    if (call.method == "getPlatformVersion") {
-      result.success("Android ${android.os.Build.VERSION.RELEASE}")
-    } else {
-      result.notImplemented()
+    override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
+        context = flutterPluginBinding.applicationContext
+        channel = MethodChannel(flutterPluginBinding.binaryMessenger, "classic_bluetooth/methods")
+        channel.setMethodCallHandler(this)
+
+        eventChannel = EventChannel(flutterPluginBinding.binaryMessenger, "classic_bluetooth/events")
+        // 这里可实现 EventChannel.StreamHandler 监听
     }
-  }
 
-  override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-    channel.setMethodCallHandler(null)
-  }
+    override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: MethodChannel.Result) {
+        when(call.method) {
+            "getBondedDevices" -> {
+                val pairedDevices = bluetoothAdapter?.bondedDevices?.map {
+                    mapOf("name" to it.name, "address" to it.address)
+                } ?: emptyList()
+                result.success(pairedDevices)
+            }
+            "isClassicConnected" -> {
+                val mac = call.argument<String>("mac")!!
+                val isConnected = sockets[mac]?.isConnected == true
+                result.success(isConnected)
+            }
+            "isBleConnected" -> {
+                val mac = call.argument<String>("mac")!!
+                val manager = context?.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+                val connectedDevices = manager.getConnectedDevices(BluetoothProfile.GATT)
+                val isConnected = connectedDevices.any { it.address == mac }
+                result.success(isConnected)
+            }
+            "connect" -> {
+                val mac = call.argument<String>("mac")!!
+                val device = bluetoothAdapter?.getRemoteDevice(mac)
+                Thread {
+                    try {
+                        val socket = device?.createRfcommSocketToServiceRecord(
+                            device.uuids.first().uuid
+                        )
+                        socket?.connect()
+                        sockets[mac] = socket!!
+                        result.success(true)
+                        // TODO: 可以通过 EventChannel 通知状态
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        result.success(false)
+                    }
+                }.start()
+            }
+            "disconnect" -> {
+                val mac = call.argument<String>("mac")!!
+                sockets[mac]?.close()
+                sockets.remove(mac)
+                result.success(null)
+            }
+            else -> result.notImplemented()
+        }
+    }
+
+    override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
+        channel.setMethodCallHandler(null)
+    }
 }
