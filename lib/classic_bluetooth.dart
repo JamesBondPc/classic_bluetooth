@@ -18,7 +18,8 @@ class ClassicBluetooth {
     'classic_bluetooth/events',
   );
 
-  static Stream<BluetoothConnectionState>? _connectionStream;
+  // 每个设备单独监听流
+  static final Map<String, Stream<BluetoothConnectionState>> _streams = {};
 
   /// 获取已配对设备
   static Future<List<BluetoothDevice>> getBondedDevices() async {
@@ -28,7 +29,7 @@ class ClassicBluetooth {
         .toList();
   }
 
-  /// 连接 Classic 蓝牙设备
+  /// 连接 Classic 蓝牙
   static Future<bool> connect(String mac, {bool checkBle = true}) async {
     final isClassicConnected = await _channel.invokeMethod(
       'isClassicConnected',
@@ -53,20 +54,21 @@ class ClassicBluetooth {
     await _channel.invokeMethod('disconnect', {'mac': mac});
   }
 
-  /// 监听 Classic 蓝牙状态
+  /// 监听 Classic 蓝牙状态（每个设备单独）
   static Stream<BluetoothConnectionState> connectionState(String mac) {
-    _connectionStream ??= _eventChannel
-        .receiveBroadcastStream({'mac': mac})
-        .map((event) {
-          switch (event) {
-            case 'connected':
-              return BluetoothConnectionState.connected;
-            case 'connecting':
-              return BluetoothConnectionState.connecting;
-            default:
-              return BluetoothConnectionState.disconnected;
-          }
-        });
-    return _connectionStream!;
+    if (!_streams.containsKey(mac)) {
+      _streams[mac] =
+          _eventChannel.receiveBroadcastStream({'mac': mac}).map((event) {
+            switch (event) {
+              case 'connected':
+                return BluetoothConnectionState.connected;
+              case 'connecting':
+                return BluetoothConnectionState.connecting;
+              default:
+                return BluetoothConnectionState.disconnected;
+            }
+          }).asBroadcastStream();
+    }
+    return _streams[mac]!;
   }
 }

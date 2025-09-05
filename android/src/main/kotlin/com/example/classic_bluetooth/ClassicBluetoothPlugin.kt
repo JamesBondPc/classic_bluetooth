@@ -10,11 +10,12 @@ import io.flutter.plugin.common.EventChannel
 
 class ClassicBluetoothPlugin: FlutterPlugin, MethodChannel.MethodCallHandler {
 
-    private lateinit var channel : MethodChannel
+    private lateinit var channel: MethodChannel
     private lateinit var eventChannel: EventChannel
     private var context: Context? = null
     private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
     private val sockets = mutableMapOf<String, BluetoothSocket>()
+    private var eventSink: EventChannel.EventSink? = null
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
@@ -22,7 +23,15 @@ class ClassicBluetoothPlugin: FlutterPlugin, MethodChannel.MethodCallHandler {
         channel.setMethodCallHandler(this)
 
         eventChannel = EventChannel(flutterPluginBinding.binaryMessenger, "classic_bluetooth/events")
-        // 这里可实现 EventChannel.StreamHandler 监听
+        eventChannel.setStreamHandler(object: EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                eventSink = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                eventSink = null
+            }
+        })
     }
 
     override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: MethodChannel.Result) {
@@ -33,11 +42,13 @@ class ClassicBluetoothPlugin: FlutterPlugin, MethodChannel.MethodCallHandler {
                 } ?: emptyList()
                 result.success(pairedDevices)
             }
+
             "isClassicConnected" -> {
                 val mac = call.argument<String>("mac")!!
                 val isConnected = sockets[mac]?.isConnected == true
                 result.success(isConnected)
             }
+
             "isBleConnected" -> {
                 val mac = call.argument<String>("mac")!!
                 val manager = context?.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -45,35 +56,49 @@ class ClassicBluetoothPlugin: FlutterPlugin, MethodChannel.MethodCallHandler {
                 val isConnected = connectedDevices.any { it.address == mac }
                 result.success(isConnected)
             }
+
             "connect" -> {
                 val mac = call.argument<String>("mac")!!
                 val device = bluetoothAdapter?.getRemoteDevice(mac)
                 Thread {
                     try {
-                        val socket = device?.createRfcommSocketToServiceRecord(
-                            device.uuids.first().uuid
-                        )
+                        val uuidToUse = device?.uuids?.firstOrNull()?.uuid
+                            ?: java.util.UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+
+                        val socket = device?.createRfcommSocketToServiceRecord(uuidToUse)
                         socket?.connect()
                         sockets[mac] = socket!!
+
+                        // 发送连接状态到 Flutter
+                        eventSink?.success(mapOf("mac" to mac, "status" to "connected"))
+
                         result.success(true)
-                        // TODO: 可以通过 EventChannel 通知状态
                     } catch (e: Exception) {
                         e.printStackTrace()
+                        eventSink?.success(mapOf("mac" to mac, "status" to "failed"))
                         result.success(false)
                     }
                 }.start()
             }
+
             "disconnect" -> {
                 val mac = call.argument<String>("mac")!!
-                sockets[mac]?.close()
-                sockets.remove(mac)
+                try {
+                    sockets[mac]?.close()
+                    sockets.remove(mac)
+                    eventSink?.success(mapOf("mac" to mac, "status" to "disconnected"))
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
                 result.success(null)
             }
+
             else -> result.notImplemented()
         }
     }
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
+        eventSink = null
     }
 }
