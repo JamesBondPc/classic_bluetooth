@@ -16,6 +16,7 @@ class ClassicBluetoothPlugin: FlutterPlugin, MethodChannel.MethodCallHandler {
     private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
     private val sockets = mutableMapOf<String, BluetoothSocket>()
     private var eventSink: EventChannel.EventSink? = null
+    private var audioManager: AudioManager? = null
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
@@ -68,6 +69,9 @@ class ClassicBluetoothPlugin: FlutterPlugin, MethodChannel.MethodCallHandler {
                         val socket = device?.createRfcommSocketToServiceRecord(uuidToUse)
                         socket?.connect()
                         sockets[mac] = socket!!
+                        
+                        // 开启 SCO 音频
+                        startScoAudio()
 
                         // 发送连接状态到 Flutter
                         eventSink?.success(mapOf("mac" to mac, "status" to "connected"))
@@ -101,4 +105,24 @@ class ClassicBluetoothPlugin: FlutterPlugin, MethodChannel.MethodCallHandler {
         channel.setMethodCallHandler(null)
         eventSink = null
     }
+
+    private fun startScoAudio() {
+    audioManager?.apply {
+        if (!isBluetoothScoOn) {
+            startBluetoothSco()
+            isBluetoothScoOn = true
+        }
+        mode = AudioManager.MODE_IN_COMMUNICATION
+    }
+}
+
+private fun stopScoAudio() {
+    audioManager?.apply {
+        if (isBluetoothScoOn) {
+            stopBluetoothSco()
+            isBluetoothScoOn = false
+        }
+        mode = AudioManager.MODE_NORMAL
+    }
+}
 }
