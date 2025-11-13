@@ -1,8 +1,9 @@
 import 'dart:async';
-
 import 'package:flutter/services.dart';
 
 enum BluetoothConnectionState { disconnected, connecting, connected }
+
+enum BluetoothAudioState { disconnected, connected, audioActive }
 
 class BluetoothDevice {
   final String name;
@@ -19,7 +20,7 @@ class ClassicBluetooth {
   );
 
   // 每个设备单独监听流
-  static final Map<String, Stream<BluetoothConnectionState>> _streams = {};
+  static final Map<String, Stream<BluetoothAudioState>> _streams = {};
 
   /// 获取已配对设备
   static Future<List<BluetoothDevice>> getBondedDevices() async {
@@ -27,6 +28,21 @@ class ClassicBluetooth {
     return devices
         .map((d) => BluetoothDevice(name: d['name'], address: d['address']))
         .toList();
+  }
+
+  /// 获取设备的音频状态
+  static Future<BluetoothAudioState> getAudioState(String mac) async {
+    final status = await _channel.invokeMethod<String>('getAudioState', {
+      'mac': mac,
+    });
+    switch (status) {
+      case 'connected':
+        return BluetoothAudioState.connected;
+      case 'audioActive':
+        return BluetoothAudioState.audioActive;
+      default:
+        return BluetoothAudioState.disconnected;
+    }
   }
 
   /// 连接 Classic 蓝牙
@@ -54,18 +70,19 @@ class ClassicBluetooth {
     await _channel.invokeMethod('disconnect', {'mac': mac});
   }
 
-  /// 监听 Classic 蓝牙状态（每个设备单独）
-  static Stream<BluetoothConnectionState> connectionState(String mac) {
+  /// 监听 Classic 蓝牙状态 + 音频路由状态
+  static Stream<BluetoothAudioState> audioState(String mac) {
     if (!_streams.containsKey(mac)) {
       _streams[mac] =
           _eventChannel.receiveBroadcastStream({'mac': mac}).map((event) {
-            switch (event) {
+            final status = event['status'] as String?;
+            switch (status) {
               case 'connected':
-                return BluetoothConnectionState.connected;
-              case 'connecting':
-                return BluetoothConnectionState.connecting;
+                return BluetoothAudioState.connected; // 只连接，没有音频
+              case 'audioActive':
+                return BluetoothAudioState.audioActive; // 连接且音频已路由
               default:
-                return BluetoothConnectionState.disconnected;
+                return BluetoothAudioState.disconnected; // 未连接
             }
           }).asBroadcastStream();
     }
